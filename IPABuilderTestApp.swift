@@ -1534,7 +1534,7 @@ struct CommentsSheet: View {
                         if liked { likedComments.insert(id) } else { likedComments.remove(id) }
                     }
                 }
-                likedCommentIDsJSON = String(data: (try? JSONEncoder().encode(Array(likedComments))) ?? Data("[]".utf8), encoding: .utf8) ?? "[]'
+                likedCommentIDsJSON = String(data: (try? JSONEncoder().encode(Array(likedComments))) ?? Data("[]".utf8), encoding: .utf8) ?? "[]"
                 commentError = ""
             }
         } catch {
