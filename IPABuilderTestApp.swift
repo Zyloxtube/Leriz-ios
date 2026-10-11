@@ -2567,6 +2567,7 @@ struct ProfileVideoPlayerSheet: View {
         ZStack(alignment: .topTrailing) {
             ClipPage(
                 clip: clip,
+                shouldRetainPlayer: true,
                 isActive: true,
                 isLiked: clip.initiallyLiked,
                 isSaved: clip.initiallySaved,
