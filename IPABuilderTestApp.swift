@@ -903,6 +903,8 @@ struct ClipPage: View {
     let onSong: () -> Void
     let onFollow: () -> Void
     @State private var player = AVPlayer()
+    @State private var firstFrame: UIImage? = nil
+    @State private var firstFrameVisible = true
     @State private var isPlaying = true
     @State private var videoFailed = false
     @State private var isFollowing = false
@@ -922,6 +924,22 @@ struct ClipPage: View {
         let seconds = player.currentTime().seconds
         if seconds.isFinite && seconds >= 0 {
             UserDefaults.standard.set(seconds, forKey: playbackPositionKey)
+        }
+    }
+
+    private func loadFirstFrame(url: URL) {
+        guard firstFrame == nil else { return }
+        Task.detached(priority: .utility) {
+            let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 720, height: 1280)
+            guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return }
+            let image = UIImage(cgImage: cgImage)
+            await MainActor.run {
+                firstFrame = image
+                firstFrameVisible = player.timeControlStatus != .playing
+            }
         }
     }
 
@@ -960,11 +978,13 @@ struct ClipPage: View {
                     .frame(maxHeight: .infinity, alignment: .top)
                     .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.92), value: commentsOpen)
                     .onAppear {
+                        loadFirstFrame(url: url)
                         if shouldRetainPlayer { configurePlayer(url: url) }
                         if isActive && shouldRetainPlayer { player.play() }
                     }
                     .onChange(of: shouldRetainPlayer) { retain in
                         if retain {
+                            loadFirstFrame(url: url)
                             configurePlayer(url: url)
                             if isActive { player.play() }
                         } else {
@@ -983,6 +1003,9 @@ struct ClipPage: View {
                         }
                     }
                     .onReceive(player.publisher(for: \.timeControlStatus).removeDuplicates()) { status in
+                        if status == .playing {
+                            withAnimation(.easeOut(duration: 0.12)) { firstFrameVisible = false }
+                        }
                         guard status == .playing, isActive, !viewRequestStarted,
                               let videoID = clip.serverID else { return }
                         viewRequestStarted = true
@@ -998,6 +1021,17 @@ struct ClipPage: View {
                     .onDisappear {
                         savePlaybackPosition()
                         player.pause()
+                    }
+                    .overlay {
+                        if firstFrameVisible, let firstFrame {
+                            Image(uiImage: firstFrame)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(maxWidth: .infinity)
+                                .frame(height: commentsOpen ? max(1, UIScreen.main.bounds.height - commentsHeight) : UIScreen.main.bounds.height, alignment: .top)
+                                .clipped()
+                                .allowsHitTesting(false)
+                        }
                     }
                     .overlay {
                         Button {
