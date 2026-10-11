@@ -2683,9 +2683,34 @@ struct CreateVideoPage: View {
                 }.padding(.horizontal, 18).padding(.vertical, 12)
 
                 ZStack(alignment: .bottom) {
-                    ARFaceFilterPreview(selectedFilter: selectedFilter)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .padding(.horizontal, 10)
+                    Group {
+                        if isBackCamera {
+                            ZStack {
+                                CameraCapturePreview(session: recorder.session)
+                                backCameraFilterTint
+                                VStack {
+                                    HStack {
+                                        Label("Back camera", systemImage: "camera.rotate")
+                                            .font(.caption.bold())
+                                            .padding(.horizontal, 10).padding(.vertical, 7)
+                                            .background(.black.opacity(0.6), in: Capsule())
+                                        Spacer()
+                                    }.padding(12)
+                                    Spacer()
+                                    Text(backCameraFilterEmoji)
+                                        .font(.system(size: 64))
+                                        .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
+                                        .padding(.bottom, 70)
+                                }
+                            }
+                        } else {
+                            ARFaceFilterPreview(selectedFilter: selectedFilter)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .padding(.horizontal, 10)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { toggleCamera() }
                     LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .center, endPoint: .bottom)
                         .frame(height: 130).clipShape(Rectangle())
                         .padding(.horizontal, 10).allowsHitTesting(false)
@@ -2791,6 +2816,45 @@ struct CreateVideoPage: View {
                 VideoEditorView(url: url, selectedFilter: selectedFilter) { payload, editedURL in
                     onPost(payload, editedURL)
                 }
+            }
+        }
+    }
+
+    private var backCameraFilterTint: some View {
+        let color: Color
+        switch selectedFilter {
+        case "Glasses": color = .cyan
+        case "Cat": color = .pink
+        case "Crown": color = .yellow
+        case "Dog": color = .orange
+        case "Robot": color = .purple
+        default: color = .clear
+        }
+        return Rectangle().fill(color.opacity(selectedFilter == "None" ? 0 : 0.13)).allowsHitTesting(false)
+    }
+
+    private var backCameraFilterEmoji: String {
+        switch selectedFilter {
+        case "Glasses": return "🤓"
+        case "Cat": return "😺"
+        case "Crown": return "👑"
+        case "Dog": return "🐶"
+        case "Robot": return "🤖"
+        default: return ""
+        }
+    }
+
+    private func toggleCamera() {
+        let nextIsBack = !isBackCamera
+        isBackCamera = nextIsBack
+        recorder.switchCamera(to: nextIsBack ? .back : .front) { error in
+            if let error {
+                isBackCamera = !nextIsBack
+                permissionMessage = error
+            } else if nextIsBack {
+                permissionMessage = "Back camera active. Selected visual effect stays on; face-tracked AR requires the front camera."
+            } else {
+                permissionMessage = nil
             }
         }
     }
@@ -3657,23 +3721,18 @@ final class LoopCameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputR
     }
 
     func switchCamera(to position: AVCaptureDevice.Position, completion: @escaping (String?) -> Void) {
-        guard !movieOutput.isRecording else {
-            DispatchQueue.main.async { completion("Stop recording before switching cameras.") }
-            return
-        }
         sessionQueue.async {
+            var configurationOpen = false
             do {
-                let wasRunning = self.session.isRunning
-                if wasRunning { self.session.stopRunning() }
                 self.session.beginConfiguration()
+                configurationOpen = true
                 try self.installVideoInput(position: position)
                 self.session.commitConfiguration()
-                if wasRunning { self.session.startRunning() }
+                configurationOpen = false
                 self.currentPosition = position
                 DispatchQueue.main.async { completion(nil) }
             } catch {
-                self.session.commitConfiguration()
-                if !self.session.isRunning { self.session.startRunning() }
+                if configurationOpen { self.session.commitConfiguration() }
                 DispatchQueue.main.async { completion(error.localizedDescription) }
             }
         }
