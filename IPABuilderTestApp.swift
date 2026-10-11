@@ -2129,34 +2129,28 @@ struct TrendingVideosPage: View {
 }
 struct VideoPreviewTile: View {
     let clip: FeedClip
-    @State private var player = AVPlayer()
-    @State private var frameIndex = 0
-    private let frameCount = 6
 
     var body: some View {
-        PlayerSurface(player: player)
-            .frame(maxWidth: .infinity)
-            .aspectRatio(9.0 / 16.0, contentMode: .fit)
-            .background(clip.accent.gradient)
-            .clipped()
-            .onAppear {
-                guard let url = URL(string: clip.videoURL) else { return }
-                player.replaceCurrentItem(with: AVPlayerItem(url: url))
-                player.isMuted = true
-                player.pause()
-                seekToPreviewFrame()
+        AsyncImage(url: clip.thumbnailURL) { phase in
+            if let image = phase.image {
+                image.resizable().scaledToFill()
+            } else {
+                ZStack {
+                    Color.black
+                    if phase.error == nil {
+                        ProgressView().tint(.white.opacity(0.8))
+                    } else {
+                        Image(systemName: "play.rectangle.fill")
+                            .font(.system(size: 26))
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
+                }
             }
-            .onReceive(Timer.publish(every: 1.0 / 3.0, on: .main, in: .common).autoconnect()) { _ in
-                guard player.currentItem != nil else { return }
-                frameIndex = (frameIndex + 1) % frameCount
-                seekToPreviewFrame()
-            }
-            .onDisappear { player.pause() }
-    }
-
-    private func seekToPreviewFrame() {
-        let seconds = Double(frameIndex) / 3.0
-        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+        .frame(maxWidth: .infinity)
+        .aspectRatio(9.0 / 16.0, contentMode: .fit)
+        .background(clip.accent.gradient)
+        .clipped()
     }
 }
 struct ProfileSheet: View {
@@ -3625,46 +3619,39 @@ struct SongDetailSheet: View {
 
 struct SongGridVideoTile: View {
     let clip: FeedClip
-    @State private var player = AVPlayer()
-    @State private var frameIndex = 0
-    private let frameCount = 6
 
     var body: some View {
-        PlayerSurface(player: player)
-            .frame(maxWidth: .infinity)
-            .aspectRatio(9.0 / 16.0, contentMode: .fit)
-            .background(Color.black)
-            .overlay(alignment: .bottomLeading) {
-                HStack(spacing: 5) {
-                    Image(systemName: "eye").font(.system(size: 12, weight: .semibold))
-                    Text(lerizFormatCount(clip.views)).font(.system(size: 11, weight: .bold))
+        AsyncImage(url: clip.thumbnailURL) { phase in
+            if let image = phase.image {
+                image.resizable().scaledToFill()
+            } else {
+                ZStack {
+                    Color.black
+                    if phase.error == nil {
+                        ProgressView().tint(.white.opacity(0.8))
+                    } else {
+                        Image(systemName: "play.rectangle.fill")
+                            .font(.system(size: 26))
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
                 }
-                .foregroundStyle(.white)
-                .padding(.leading, 9).padding(.bottom, 9)
-                .shadow(color: .black.opacity(0.9), radius: 3)
             }
-            .clipped()
-            .onAppear {
-                guard let url = URL(string: clip.videoURL) else { return }
-                player.replaceCurrentItem(with: AVPlayerItem(url: url))
-                player.isMuted = true
-                player.pause()
-                seekPreview()
+        }
+        .frame(maxWidth: .infinity)
+        .aspectRatio(9.0 / 16.0, contentMode: .fit)
+        .background(Color.black)
+        .overlay(alignment: .bottomLeading) {
+            HStack(spacing: 5) {
+                Image(systemName: "eye").font(.system(size: 12, weight: .semibold))
+                Text(lerizFormatCount(clip.views)).font(.system(size: 11, weight: .bold))
             }
-            .onReceive(Timer.publish(every: 1.0 / 3.0, on: .main, in: .common).autoconnect()) { _ in
-                guard player.currentItem != nil else { return }
-                frameIndex = (frameIndex + 1) % frameCount
-                seekPreview()
-            }
-            .onDisappear { player.pause() }
-    }
-
-    private func seekPreview() {
-        player.seek(to: CMTime(seconds: Double(frameIndex) / 3.0, preferredTimescale: 600),
-                    toleranceBefore: .zero, toleranceAfter: .zero)
+            .foregroundStyle(.white)
+            .padding(.leading, 9).padding(.bottom, 9)
+            .shadow(color: .black.opacity(0.9), radius: 3)
+        }
+        .clipped()
     }
 }
-
 struct ARFaceFilterPreview: UIViewRepresentable {
     let selectedFilter: String
 
