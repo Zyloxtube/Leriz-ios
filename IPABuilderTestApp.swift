@@ -893,7 +893,11 @@ struct ClipPage: View {
                     .frame(maxHeight: .infinity, alignment: .top)
                     .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.92), value: commentsOpen)
                     .onAppear {
-                        player.replaceCurrentItem(with: AVPlayerItem(url: url))
+                        let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+                        let item = AVPlayerItem(asset: asset)
+                        item.preferredForwardBufferDuration = 4
+                        player.automaticallyWaitsToMinimizeStalling = false
+                        player.replaceCurrentItem(with: item)
                         player.isMuted = false
                         if isActive { player.play() }
                     }
