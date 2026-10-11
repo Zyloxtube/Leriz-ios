@@ -11,6 +11,8 @@ targets:
       - IPABuilderTestApp.swift
       - path: server.json
         buildPhase: resources
+      - path: settings.json
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zyloxtube.leriz
