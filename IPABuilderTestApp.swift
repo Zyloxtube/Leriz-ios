@@ -302,6 +302,14 @@ struct FeedClip: Identifiable {
         return parts[index + 1]
     }
 
+    // Server-generated first-frame thumbnail. This avoids downloading/decoding the full
+    // video just to display its preview while the video player buffers.
+    var thumbnailURL: URL? {
+        guard let serverID, !serverID.isEmpty else { return nil }
+        let base = LerizAPI.baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return URL(string: "\(base)/api/videos/\(serverID)/thumbnail")
+    }
+
     // The feed starts empty and is populated only by videos returned by the Leriz backend.
     static let samples: [FeedClip] = []
 }
@@ -940,17 +948,23 @@ struct ClipPage: View {
     }
 
     private func loadFirstFrame(url: URL) {
-        guard firstFrame == nil else { return }
-        Task.detached(priority: .utility) {
-            let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 720, height: 1280)
-            guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return }
-            let image = UIImage(cgImage: cgImage)
-            await MainActor.run {
-                firstFrame = image
-                firstFrameVisible = player.timeControlStatus != .playing
+        guard firstFrame == nil, let thumbnailURL = clip.thumbnailURL else { return }
+        var request = URLRequest(url: thumbnailURL)
+        request.setValue("true", forHTTPHeaderField: "ngrok-skip-browser-warning")
+        let token = LerizAPI.token
+        if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        Task {
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse,
+                      (200...299).contains(http.statusCode),
+                      let image = UIImage(data: data) else { return }
+                await MainActor.run {
+                    firstFrame = image
+                    firstFrameVisible = player.timeControlStatus != .playing
+                }
+            } catch {
+                // Keep the video surface available if the thumbnail endpoint is temporarily unavailable.
             }
         }
     }
