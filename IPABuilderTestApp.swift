@@ -63,8 +63,9 @@ struct LerizAPI {
         return (data, http)
     }
 
-    static func fetchFeed(mode: String = "forYou") async throws -> [FeedClip] {
-        let (data, _) = try await request("api/feed?mode=\(mode.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? mode)&limit=100&offset=0")
+    static func fetchFeed(mode: String = "forYou", offset: Int = 0, limit: Int = 12) async throws -> [FeedClip] {
+        let safeMode = mode.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? mode
+        let (data, _) = try await request("api/feed?mode=\(safeMode)&limit=\(max(1, min(limit, 24)))&offset=\(max(0, offset))")
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         let rows = json["videos"] as? [[String: Any]] ?? []
         return rows.compactMap { row in
@@ -584,6 +585,9 @@ struct LoopFeedView: View {
     @AppStorage("lerizUsername") private var currentUsername = ""
     @AppStorage("lerizAuthToken") private var authToken = ""
     @State private var selectedClip = 0
+    @State private var feedHasMore = true
+    @State private var feedLoadingMore = false
+    @State private var activeFeedMode = "forYou"
     @State private var showCreate = false
     @State private var likedIDs: Set<Int> = []
     @State private var savedIDs: Set<Int> = []
@@ -619,6 +623,7 @@ struct LoopFeedView: View {
                     ForEach(Array(clips.enumerated()), id: \.element.id) { index, clip in
                         ClipPage(
                             clip: clip,
+                            shouldRetainPlayer: index >= selectedClip - 1 && index <= selectedClip + 2,
                             isActive: selectedClip == index && !showComments && !showSearch && !showProfile && selectedProfileClip == nil && selectedSongClip == nil && !showInbox && !showShare && !showCreate,
                             isLiked: likedIDs.contains(clip.id),
                             isSaved: savedIDs.contains(clip.id),
@@ -653,6 +658,11 @@ struct LoopFeedView: View {
         }
         .task { await loadFeed() }
         .onChange(of: selectedTab) { value in Task { await loadFeed(mode: value == "Following" ? "following" : "forYou") } }
+        .onChange(of: selectedClip) { index in
+            if feedHasMore && !feedLoadingMore && index >= max(0, clips.count - 3) {
+                Task { await loadMoreFeed() }
+            }
+        }
         .overlay(alignment: .bottom) {
             if showComments && !clips.isEmpty {
                 CommentsSheet(
@@ -706,17 +716,45 @@ struct LoopFeedView: View {
     @MainActor
     private func loadFeed(mode: String = "forYou") async {
         feedLoading = true
+        feedLoadingMore = false
+        activeFeedMode = mode
+        feedHasMore = true
         do {
-            clips = try await LerizAPI.fetchFeed(mode: mode)
+            let firstPage = try await LerizAPI.fetchFeed(mode: mode, offset: 0, limit: 12)
+            clips = firstPage
+            feedHasMore = firstPage.count == 12
             likedIDs = Set(clips.filter { $0.initiallyLiked }.map(\.id))
             savedIDs = Set(clips.filter { $0.initiallySaved }.map(\.id))
-            selectedClip = min(selectedClip, max(0, clips.count - 1))
+            selectedClip = 0
             feedError = ""
         } catch {
             clips = []
+            feedHasMore = false
             feedError = "Could not load videos. Check your connection and try again."
         }
         feedLoading = false
+    }
+
+    @MainActor
+    private func loadMoreFeed() async {
+        guard feedHasMore, !feedLoadingMore, !feedLoading else { return }
+        feedLoadingMore = true
+        let offset = clips.count
+        do {
+            let page = try await LerizAPI.fetchFeed(mode: activeFeedMode, offset: offset, limit: 12)
+            let knownIDs = Set(clips.compactMap { $0.serverID })
+            let fresh = page.filter { clip in
+                guard let id = clip.serverID else { return true }
+                return !knownIDs.contains(id)
+            }
+            clips.append(contentsOf: fresh)
+            likedIDs.formUnion(fresh.filter { $0.initiallyLiked }.map(\.id))
+            savedIDs.formUnion(fresh.filter { $0.initiallySaved }.map(\.id))
+            feedHasMore = page.count == 12
+        } catch {
+            feedError = "Could not load more videos. Keep scrolling to retry."
+        }
+        feedLoadingMore = false
     }
 
     private var topBar: some View {
@@ -851,6 +889,7 @@ struct LoopFeedView: View {
 
 struct ClipPage: View {
     let clip: FeedClip
+    let shouldRetainPlayer: Bool
     let isActive: Bool
     let isLiked: Bool
     let isSaved: Bool
@@ -875,6 +914,34 @@ struct ClipPage: View {
     @State private var captionExpanded = false
     @State private var viewRequestStarted = false
 
+    private var playbackPositionKey: String {
+        "lerizPlaybackPosition:" + (clip.serverID ?? String(clip.id))
+    }
+
+    private func savePlaybackPosition() {
+        let seconds = player.currentTime().seconds
+        if seconds.isFinite && seconds >= 0 {
+            UserDefaults.standard.set(seconds, forKey: playbackPositionKey)
+        }
+    }
+
+    private func configurePlayer(url: URL) {
+        if let currentAsset = player.currentItem?.asset as? AVURLAsset, currentAsset.url == url {
+            return
+        }
+        let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = 2
+        player.automaticallyWaitsToMinimizeStalling = true
+        player.replaceCurrentItem(with: item)
+        player.isMuted = false
+        let saved = UserDefaults.standard.double(forKey: playbackPositionKey)
+        if saved > 0 {
+            let target = CMTime(seconds: saved, preferredTimescale: 600)
+            player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+    }
+
     private var captionHashtags: [String] {
         clip.descriptionText.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "_" && $0 != "#" })
             .filter { $0.hasPrefix("#") && $0.count > 1 }
@@ -893,16 +960,27 @@ struct ClipPage: View {
                     .frame(maxHeight: .infinity, alignment: .top)
                     .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.92), value: commentsOpen)
                     .onAppear {
-                        let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
-                        let item = AVPlayerItem(asset: asset)
-                        item.preferredForwardBufferDuration = 4
-                        player.automaticallyWaitsToMinimizeStalling = false
-                        player.replaceCurrentItem(with: item)
-                        player.isMuted = false
-                        if isActive { player.play() }
+                        if shouldRetainPlayer { configurePlayer(url: url) }
+                        if isActive && shouldRetainPlayer { player.play() }
+                    }
+                    .onChange(of: shouldRetainPlayer) { retain in
+                        if retain {
+                            configurePlayer(url: url)
+                            if isActive { player.play() }
+                        } else {
+                            savePlaybackPosition()
+                            player.pause()
+                            player.replaceCurrentItem(with: nil)
+                        }
                     }
                     .onChange(of: isActive) { active in
-                        if active { player.play(); isPlaying = true } else { player.pause() }
+                        if active {
+                            if shouldRetainPlayer { configurePlayer(url: url); player.play() }
+                            isPlaying = true
+                        } else {
+                            savePlaybackPosition()
+                            player.pause()
+                        }
                     }
                     .onReceive(player.publisher(for: \.timeControlStatus).removeDuplicates()) { status in
                         guard status == .playing, isActive, !viewRequestStarted,
@@ -917,7 +995,10 @@ struct ClipPage: View {
                             if isActive && isPlaying { player.play() }
                         }
                     }
-                    .onDisappear { player.pause() }
+                    .onDisappear {
+                        savePlaybackPosition()
+                        player.pause()
+                    }
                     .overlay {
                         Button {
                             if isPlaying {
