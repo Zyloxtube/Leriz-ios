@@ -66,10 +66,22 @@ struct LerizAPI {
             let display = user["displayName"] as? String ?? user["display_name"] as? String ?? username
             let rawURL = row["videoURL"] as? String ?? row["videoUrl"] as? String ?? row["url"] as? String ?? "/api/videos/\(id)/file"
             let url = URL(string: rawURL)?.scheme == nil ? baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + (rawURL.hasPrefix("/") ? rawURL : "/\(rawURL)") : rawURL
-            let caption = row["caption"] as? String ?? ""
+            let rawCaption = row["caption"] as? String ?? ""
+            let serverTitle = row["title"] as? String ?? ""
+            let legacyMarker = "\u{001E}LERIZ_TITLE:"
+            let title: String
+            let caption: String
+            if rawCaption.hasPrefix(legacyMarker), let newline = rawCaption.firstIndex(of: "\n") {
+                let legacyTitle = String(rawCaption[rawCaption.index(rawCaption.startIndex, offsetBy: legacyMarker.count)..<newline])
+                title = serverTitle.isEmpty ? legacyTitle : serverTitle
+                caption = String(rawCaption[rawCaption.index(after: newline)...])
+            } else {
+                title = serverTitle
+                caption = rawCaption
+            }
             let likes = row["likes"] as? Int ?? 0
             let comments = row["comments"] as? Int ?? 0
-            var clip = FeedClip(id: abs(id.hashValue % 2_000_000_000), creator: display, handle: "@\(username)", caption: caption, tags: "", song: "original audio · \(username)", likes: String(likes), comments: String(comments), views: row["views"] as? Int ?? 0, accent: .purple, videoURL: url, symbol: "person")
+            var clip = FeedClip(id: abs(id.hashValue % 2_000_000_000), creator: display, handle: "@\(username)", caption: caption, title: title, tags: "", song: "original audio · \(username)", likes: String(likes), comments: String(comments), views: row["views"] as? Int ?? 0, accent: .purple, videoURL: url, symbol: "person")
             clip.avatarURL = user["avatarURL"] as? String ?? user["avatar_url"] as? String ?? ""
             clip.initiallyLiked = row["likedByMe"] as? Bool ?? false
             clip.initiallySaved = row["savedByMe"] as? Bool ?? false
@@ -77,11 +89,12 @@ struct LerizAPI {
         }
     }
 
-    static func uploadVideo(fileURL: URL, caption: String) async throws {
+    static func uploadVideo(fileURL: URL, title: String, caption: String) async throws {
         let video = try Data(contentsOf: fileURL)
         let boundary = "LerizBoundary-\(UUID().uuidString)"
         var body = Data()
         func append(_ value: String) { body.append(Data(value.utf8)) }
+        append("--\(boundary)\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\(title)\r\n")
         append("--\(boundary)\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n\(caption)\r\n")
         append("--\(boundary)\r\nContent-Disposition: form-data; name=\"video\"; filename=\"leriz-upload.mp4\"\r\nContent-Type: video/mp4\r\n\r\n")
         body.append(video)
@@ -258,6 +271,7 @@ struct FeedClip: Identifiable {
     let creator: String
     let handle: String
     let caption: String
+    var title: String = ""
     let tags: String
     let song: String
     let likes: String
@@ -270,15 +284,7 @@ struct FeedClip: Identifiable {
     var initiallyLiked = false
     var initiallySaved = false
 
-    private static let metadataMarker = "\u{001E}LERIZ_TITLE:"
-    var title: String {
-        guard caption.hasPrefix(Self.metadataMarker), let end = caption.firstIndex(of: "\n") else { return "" }
-        return String(caption[caption.index(caption.startIndex, offsetBy: Self.metadataMarker.count)..<end])
-    }
-    var descriptionText: String {
-        guard caption.hasPrefix(Self.metadataMarker), let end = caption.firstIndex(of: "\n") else { return caption }
-        return String(caption[caption.index(after: end)...])
-    }
+    var descriptionText: String { caption }
 
     var serverID: String? {
         guard let url = URL(string: videoURL) else { return nil }
@@ -665,10 +671,10 @@ struct LoopFeedView: View {
             ProfileSheet()
         }
         .fullScreenCover(isPresented: $showCreate) {
-            CreateVideoPage { caption, mediaURL in
+            CreateVideoPage { title, caption, mediaURL in
                 Task {
                     do {
-                        try await LerizAPI.uploadVideo(fileURL: mediaURL, caption: caption)
+                        try await LerizAPI.uploadVideo(fileURL: mediaURL, title: title, caption: caption)
                         await loadFeed()
                         await MainActor.run {
                             selectedClip = 0
@@ -2650,7 +2656,7 @@ struct ShareSheet: View {
 }
 
 struct CreateVideoPage: View {
-    let onPost: (String, URL) -> Void
+    let onPost: (String, String, URL) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var caption = ""
     @State private var isRecording = false
@@ -2813,8 +2819,8 @@ struct CreateVideoPage: View {
         }
         .fullScreenCover(isPresented: $showEditor) {
             if let url = recordedURL {
-                VideoEditorView(url: url, selectedFilter: selectedFilter) { payload, editedURL in
-                    onPost(payload, editedURL)
+                VideoEditorView(url: url, selectedFilter: selectedFilter) { title, caption, editedURL in
+                    onPost(title, caption, editedURL)
                 }
             }
         }
@@ -3034,7 +3040,7 @@ struct HashtagVideosSheet: View {
 struct VideoEditorView: View {
     let url: URL
     let selectedFilter: String
-    let onPost: (String, URL) -> Void
+    let onPost: (String, String, URL) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var title = ""
@@ -3254,14 +3260,13 @@ struct VideoEditorView: View {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         let overlay = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let payload = "\u{001E}LERIZ_TITLE:" + cleanTitle + "\n" + cleanCaption
         Task {
             await ensureHashtagsExist(in: cleanCaption)
             if overlay.isEmpty {
-                await MainActor.run { onPost(payload, url) }
+                await MainActor.run { onPost(cleanTitle, cleanCaption, url) }
             } else {
                 let rendered = await renderTextIntoVideo(text: overlay, sourceURL: url, color: UIColor(textColor), opacity: opacity, border: useBorder, gradient: useGradient)
-                await MainActor.run { onPost(payload, rendered ?? url) }
+                await MainActor.run { onPost(cleanTitle, cleanCaption, rendered ?? url) }
             }
         }
     }
