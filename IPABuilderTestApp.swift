@@ -89,6 +89,22 @@ struct LerizAPI {
         _ = try await request("api/videos", method: "POST", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
     }
 
+    static func registerViewIfNeeded(videoID: String, username: String) async {
+        let account = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !account.isEmpty, !videoID.isEmpty else { return }
+        let key = "lerizViewedVideoIDs:\(account)"
+        var viewed = UserDefaults.standard.stringArray(forKey: key) ?? []
+        guard !viewed.contains(videoID) else { return }
+        viewed.append(videoID)
+        UserDefaults.standard.set(viewed, forKey: key)
+        let safeID = videoID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? videoID
+        do {
+            _ = try await request("api/videos/\(safeID)/view", method: "POST", body: Data("{}".utf8))
+        } catch {
+            // Avoid blind retry: a network error may arrive after the server committed the view.
+        }
+    }
+
     static func toggleLike(videoID: String) async throws -> [String: Any] {
         let (data, _) = try await request("api/videos/\(videoID)/like", method: "POST", body: Data("{}".utf8))
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
@@ -229,6 +245,12 @@ struct LerizAvatarView: View {
         components.queryItems?.append(URLQueryItem(name: "avatar_refresh", value: cacheBuster))
         return components.url
     }
+}
+
+func lerizFormatCount(_ value: Int) -> String {
+    if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
+    if value >= 1_000 { return String(format: "%.1fK", Double(value) / 1_000) }
+    return String(value)
 }
 
 struct FeedClip: Identifiable {
@@ -837,6 +859,7 @@ struct ClipPage: View {
     @State private var tappedHashtag = ""
     @State private var showHashtagPage = false
     @State private var captionExpanded = false
+    @State private var viewRequestStarted = false
 
     private var captionHashtags: [String] {
         clip.descriptionText.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "_" && $0 != "#" })
@@ -862,6 +885,12 @@ struct ClipPage: View {
                     }
                     .onChange(of: isActive) { active in
                         if active { player.play(); isPlaying = true } else { player.pause() }
+                    }
+                    .onReceive(player.publisher(for: \.timeControlStatus).removeDuplicates()) { status in
+                        guard status == .playing, isActive, !viewRequestStarted,
+                              let videoID = clip.serverID else { return }
+                        viewRequestStarted = true
+                        Task { await LerizAPI.registerViewIfNeeded(videoID: videoID, username: currentUsername) }
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
                         guard let ended = notification.object as? AVPlayerItem,
@@ -2163,7 +2192,13 @@ struct ProfileSheet: View {
                 }
                 .preferredColorScheme(.dark)
             }
-            .task { await loadProfile() }
+            .task {
+                await loadProfile()
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    if !Task.isCancelled { await refreshProfileVideoViews() }
+                }
+            }
             .confirmationDialog("Delete this video?", isPresented: $showVideoDeleteConfirmation, titleVisibility: .visible) {
                 Button("Delete video", role: .destructive) {
                     if let video = videoToDelete {
@@ -2238,6 +2273,28 @@ struct ProfileSheet: View {
             profileLoadError = "Could not load profile: \(error.localizedDescription)"
         }
         profileLoading = false
+    }
+
+    @MainActor
+    private func refreshProfileVideoViews() async {
+        let username = (clip?.handle.replacingOccurrences(of: "@", with: "") ?? currentUsername).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !username.isEmpty else { return }
+        let safe = username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? username
+        do {
+            let (data, _) = try await LerizAPI.request("api/users/\(safe)")
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+            let rows = json["videos"] as? [[String: Any]] ?? []
+            var counts: [String: Int] = [:]
+            for row in rows { if let id = row["id"] as? String { counts[id] = row["views"] as? Int ?? 0 } }
+            profileVideos = profileVideos.map { video in
+                guard let id = video.serverID, let count = counts[id], count != video.views else { return video }
+                var updated = FeedClip(id: video.id, creator: video.creator, handle: video.handle, caption: video.caption, tags: video.tags, song: video.song, likes: video.likes, comments: video.comments, views: count, accent: video.accent, videoURL: video.videoURL, symbol: video.symbol)
+                updated.avatarURL = video.avatarURL
+                updated.initiallyLiked = video.initiallyLiked
+                updated.initiallySaved = video.initiallySaved
+                return updated
+            }
+        } catch { }
     }
 
     private func deleteProfileVideo(_ video: FeedClip) async {
@@ -2856,7 +2913,7 @@ struct HashtagVideosSheet: View {
                                 Image(systemName: "play.rectangle.fill").font(.system(size: 30)).foregroundStyle(.cyan)
                                 VStack(alignment: .leading) {
                                     Text(row["caption"] as? String ?? "#\(tag)").lineLimit(2)
-                                    Text("\(row["views"] as? Int ?? 0) views").font(.caption).foregroundStyle(.secondary)
+                                    Text("\(lerizFormatCount(row["views"] as? Int ?? 0)) views").font(.caption).foregroundStyle(.secondary)
                                 }
                             }
                         }.buttonStyle(.plain)
@@ -3327,7 +3384,7 @@ struct SongGridVideoTile: View {
             .overlay(alignment: .bottomLeading) {
                 HStack(spacing: 5) {
                     Image(systemName: "eye").font(.system(size: 12, weight: .semibold))
-                    Text(clip.views.formatted()).font(.system(size: 11, weight: .bold))
+                    Text(lerizFormatCount(clip.views)).font(.system(size: 11, weight: .bold))
                 }
                 .foregroundStyle(.white)
                 .padding(.leading, 9).padding(.bottom, 9)
