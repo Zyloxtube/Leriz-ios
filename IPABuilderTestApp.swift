@@ -1206,7 +1206,7 @@ struct CommentsSheet: View {
                                     let handle = author.trimmingCharacters(in: CharacterSet(charactersIn: "@"))
                                     selectedCommentProfile = FeedClip(id: abs(handle.hashValue % 2_000_000_000), creator: author, handle: "@\(handle)", caption: "", tags: "", song: "", likes: "0", comments: "0", views: 0, accent: .purple, videoURL: "", symbol: "person", avatarURL: index < commentAvatarURLs.count ? commentAvatarURLs[index] : "")
                                 } label: {
-                                    LerizAvatarView(urlString: index < commentAvatarURLs.count ? commentAvatarURLs[index] : "", size: isReply ? 30 : 43, fallbackColor: .purple)
+                                    LerizAvatarView(urlString: index < commentAvatarURLs.count ? commentAvatarURLs[index] : "", size: 43, fallbackColor: .purple)
                                 }.buttonStyle(.plain)
                                 VStack(alignment: .leading, spacing: 5) {
                                     HStack(spacing: 5) {
@@ -1246,8 +1246,6 @@ struct CommentsSheet: View {
                             .padding(.leading, index < commentParentIDs.count && commentParentIDs[index] != nil ? 48 : 17)
                             .padding(.trailing, 17)
                             .padding(.vertical, isReply ? 7 : 13)
-                            .background(isReply ? Color.white.opacity(0.045) : Color.clear, in: RoundedRectangle(cornerRadius: 13))
-                            .overlay(alignment: .leading) { if isReply { RoundedRectangle(cornerRadius: 2).fill(Color.purple.opacity(0.8)).frame(width: 2).padding(.vertical, 8) } }
                             .contentShape(Rectangle())
                             .contextMenu {
                                 if isOwnComment && !commentID.hasPrefix("local-") && !commentID.hasPrefix("reply:") {
@@ -3340,7 +3338,7 @@ struct SongGridVideoTile: View {
                 guard let url = URL(string: clip.videoURL) else { return }
                 player.replaceCurrentItem(with: AVPlayerItem(url: url))
                 player.isMuted = true
-                player.playImmediately(atRate: 0.35)
+                player.pause()
                 seekPreview()
             }
             .onReceive(Timer.publish(every: 1.0 / 3.0, on: .main, in: .common).autoconnect()) { _ in
