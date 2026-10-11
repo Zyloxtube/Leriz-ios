@@ -353,7 +353,19 @@ struct LerizLaunchView: View {
                 isCheckingSession = false
             }
         } catch {
-            authToken = ""
+            let statusCode = (error as NSError).code
+            let message = error.localizedDescription
+            let isUnauthorized = statusCode == 401 || statusCode == 403 ||
+                message.localizedCaseInsensitiveContains("unauthorized") ||
+                message.localizedCaseInsensitiveContains("invalid token") ||
+                message.localizedCaseInsensitiveContains("token expired")
+            if isUnauthorized {
+                authToken = ""
+                authError = "Your saved session expired. Please log in again."
+            } else {
+                // A tunnel/network failure must not destroy a valid saved login.
+                authError = "Could not verify your saved login. Check your connection and try again; your saved session has been kept."
+            }
             withAnimation(.easeInOut(duration: 0.45)) {
                 enterApp = false
                 isCheckingSession = false
