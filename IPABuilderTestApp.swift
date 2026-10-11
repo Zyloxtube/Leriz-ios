@@ -1155,6 +1155,7 @@ struct CommentsSheet: View {
     @State private var showEmojiPicker = false
     @AppStorage("lerizLikedCommentIDs") private var likedCommentIDsJSON = "[]"
     @State private var likedComments: Set<String> = []
+    @State private var commentLikeCounts: [String: Int] = [:]
     @State private var replyToID: String? = nil
     @State private var replyToAuthor = ""
     @FocusState private var commentFieldFocused: Bool
@@ -1212,7 +1213,15 @@ struct CommentsSheet: View {
                         let target = proposed >= screenHeight * 0.75 ? screenHeight * 0.98 : screenHeight * 0.50
                         withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) { sheetHeight = target }
                     })
-                .onAppear { Task { await loadComments(); await loadMyAvatar() } }
+                .task {
+                    await loadComments()
+                    await loadMyAvatar()
+                    while !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                        if Task.isCancelled { break }
+                        await loadComments()
+                    }
+                }
 
                 Divider().overlay(Color.white.opacity(0.08))
 
@@ -1267,7 +1276,7 @@ struct CommentsSheet: View {
                                         Image(systemName: likedComments.contains(commentID) ? "heart.fill" : "heart")
                                             .font(.system(size: 15))
                                             .foregroundStyle(likedComments.contains(commentID) ? AnyShapeStyle(LinearGradient(colors: [.pink, .purple, .orange], startPoint: .bottomLeading, endPoint: .topTrailing)) : AnyShapeStyle(Color.white.opacity(0.68)))
-                                        Text("").font(.system(size: 10)).foregroundStyle(.secondary)
+                                        Text("\(commentLikeCounts[commentID] ?? 0)").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
                                     }
                                 }
                                 .buttonStyle(.plain)
@@ -1466,16 +1475,23 @@ struct CommentsSheet: View {
 
     private func toggleCommentLike(commentID: String) async {
         let wasLiked = likedComments.contains(commentID)
+        let previousCount = commentLikeCounts[commentID] ?? 0
         await MainActor.run {
             if wasLiked { likedComments.remove(commentID) } else { likedComments.insert(commentID) }
+            commentLikeCounts[commentID] = max(0, previousCount + (wasLiked ? -1 : 1))
             likedCommentIDsJSON = String(data: (try? JSONEncoder().encode(Array(likedComments))) ?? Data("[]".utf8), encoding: .utf8) ?? "[]"
         }
         guard !commentID.hasPrefix("local-"), !commentID.hasPrefix("reply:") else { return }
         do {
-            _ = try await LerizAPI.toggleCommentLike(commentID: commentID)
+            let response = try await LerizAPI.toggleCommentLike(commentID: commentID)
+            let serverCount = response["likes"] as? Int ?? response["likeCount"] as? Int ?? response["like_count"] as? Int
+            if let serverCount {
+                await MainActor.run { commentLikeCounts[commentID] = max(0, serverCount) }
+            }
         } catch {
             await MainActor.run {
                 if wasLiked { likedComments.insert(commentID) } else { likedComments.remove(commentID) }
+                commentLikeCounts[commentID] = previousCount
                 likedCommentIDsJSON = String(data: (try? JSONEncoder().encode(Array(likedComments))) ?? Data("[]".utf8), encoding: .utf8) ?? "[]"
                 commentError = "Comment like could not sync: \(error.localizedDescription)"
             }
@@ -1504,8 +1520,21 @@ struct CommentsSheet: View {
                     let value = row["parentID"] ?? row["parentId"]
                     return value as? String
                 }
-                commentEdited = orderedRows.map { $0["edited"] as? Bool ?? false }
-                commentDateLabels = orderedRows.map { Self.relativeCommentDate($0) }
+                commentEdited = rows.map { $0["edited"] as? Bool ?? false }
+                commentDateLabels = rows.map { Self.relativeCommentDate($0) }
+                commentLikeCounts = Dictionary(uniqueKeysWithValues: rows.compactMap { row -> (String, Int)? in
+                    guard let rawID = row["id"] else { return nil }
+                    let count = row["likes"] as? Int ?? row["likeCount"] as? Int ?? row["like_count"] as? Int ?? 0
+                    return (String(describing: rawID), count)
+                })
+                for row in rows {
+                    guard let rawID = row["id"] else { continue }
+                    let id = String(describing: rawID)
+                    if let liked = row["likedByMe"] as? Bool ?? row["liked_by_me"] as? Bool {
+                        if liked { likedComments.insert(id) } else { likedComments.remove(id) }
+                    }
+                }
+                likedCommentIDsJSON = String(data: (try? JSONEncoder().encode(Array(likedComments))) ?? Data("[]".utf8), encoding: .utf8) ?? "[]'
                 commentError = ""
             }
         } catch {
@@ -1600,6 +1629,7 @@ struct CommentsSheet: View {
                     commentAvatarURLs.insert("", at: min(insertionIndex, commentAvatarURLs.count))
                     commentParentIDs.insert(actualParent, at: min(insertionIndex, commentParentIDs.count))
                     commentEdited.insert(false, at: min(insertionIndex, commentEdited.count))
+                    commentLikeCounts[newID] = 0
                     comment = ""
                     replyToID = nil
                     replyToAuthor = ""
