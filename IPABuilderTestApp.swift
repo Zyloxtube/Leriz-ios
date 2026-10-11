@@ -13,17 +13,25 @@ import Photos
 import UniformTypeIdentifiers
 
 struct LerizServerConfiguration: Decodable {
-    let serverName: String
-    let baseURL: String
+    let appName: String
+    let iconPath: String?
+    let serverUrl: String
+
+    var serverName: String { "\(appName) server" }
+    var baseURL: String { serverUrl }
 
     static let current: LerizServerConfiguration = {
         guard
-            let url = Bundle.main.url(forResource: "server", withExtension: "json"),
+            let url = Bundle.main.url(forResource: "settings", withExtension: "json"),
             let data = try? Data(contentsOf: url),
             let config = try? JSONDecoder().decode(LerizServerConfiguration.self, from: data),
-            URL(string: config.baseURL) != nil
+            URL(string: config.serverUrl) != nil
         else {
-            return LerizServerConfiguration(serverName: "Leriz Server", baseURL: "https://subhyaloid-kallie-bihourly.ngrok-free.dev")
+            return LerizServerConfiguration(
+                appName: "Leriz",
+                iconPath: nil,
+                serverUrl: "https://parliament-congratulations-casting-manufacturing.trycloudflare.com"
+            )
         }
         return config
     }()
@@ -564,7 +572,7 @@ struct LerizLaunchView: View {
             }
         } catch {
             isLoading = false
-            authError = "Cannot connect to \\(config.serverName). Check that the backend and ngrok are running. \\(error.localizedDescription)"
+            authError = "Cannot connect to \\(config.serverName). Check that the backend and Cloudflare Tunnel are running. \\(error.localizedDescription)"
         }
     }
 }
