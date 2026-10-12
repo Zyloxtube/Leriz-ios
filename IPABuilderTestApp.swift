@@ -975,7 +975,7 @@ struct ClipPage: View {
         }
         let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
         let item = AVPlayerItem(asset: asset)
-        item.preferredForwardBufferDuration = 2
+        item.preferredForwardBufferDuration = 8
         player.automaticallyWaitsToMinimizeStalling = true
         player.replaceCurrentItem(with: item)
         player.isMuted = false
