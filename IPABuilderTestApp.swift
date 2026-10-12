@@ -679,7 +679,7 @@ struct LoopFeedView: View {
                     ForEach(Array(clips.enumerated()), id: \.element.id) { index, clip in
                         ClipPage(
                             clip: clip,
-                            shouldRetainPlayer: index >= selectedClip - 1 && index <= selectedClip + 2,
+                            shouldRetainPlayer: index >= selectedClip && index <= selectedClip + 2,
                             isActive: selectedClip == index && !showComments && !showSearch && !showProfile && selectedProfileClip == nil && selectedSongClip == nil && !showInbox && !showShare && !showCreate,
                             isLiked: likedIDs.contains(clip.id),
                             isSaved: savedIDs.contains(clip.id),
@@ -1005,15 +1005,17 @@ struct ClipPage: View {
         }
     }
 
-    private func configurePlayer(url: URL) {
+    private func configurePlayer(url: URL, isActive: Bool = false) {
         if let currentAsset = player.currentItem?.asset as? AVURLAsset, currentAsset.url == url {
+            // Promote the newly active clip to full adaptive buffering; keep queued clips light.
+            player.currentItem?.preferredForwardBufferDuration = isActive ? 0 : 2.5
             return
         }
         let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
         let item = AVPlayerItem(asset: asset)
-        // Let AVPlayer adapt its forward buffer to the actual connection instead of
-        // forcing a small four-second cap that can trigger repeated stalls on slow links.
-        item.preferredForwardBufferDuration = 0
+        // Reserve adaptive buffering for the visible clip. Only a short buffer is kept
+        // for the next clips so they can start quickly without competing for bandwidth.
+        item.preferredForwardBufferDuration = isActive ? 0 : 2.5
         player.automaticallyWaitsToMinimizeStalling = true
         player.replaceCurrentItem(with: item)
         player.isMuted = false
@@ -1043,13 +1045,13 @@ struct ClipPage: View {
                     .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.92), value: commentsOpen)
                     .onAppear {
                         loadFirstFrame(url: url)
-                        if shouldRetainPlayer { configurePlayer(url: url) }
+                        if shouldRetainPlayer { configurePlayer(url: url, isActive: isActive) }
                         if isActive && shouldRetainPlayer { player.play() }
                     }
                     .onChange(of: shouldRetainPlayer) { retain in
                         if retain {
                             loadFirstFrame(url: url)
-                            configurePlayer(url: url)
+                            configurePlayer(url: url, isActive: isActive)
                             if isActive { player.play() }
                         } else {
                             savePlaybackPosition()
@@ -1059,7 +1061,7 @@ struct ClipPage: View {
                     }
                     .onChange(of: isActive) { active in
                         if active {
-                            if shouldRetainPlayer { configurePlayer(url: url); player.play() }
+                            if shouldRetainPlayer { configurePlayer(url: url, isActive: true); player.play() }
                             isPlaying = true
                         } else {
                             savePlaybackPosition()
