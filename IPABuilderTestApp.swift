@@ -99,16 +99,52 @@ struct LerizAPI {
     }
 
     static func uploadVideo(fileURL: URL, title: String, caption: String) async throws {
-        let video = try Data(contentsOf: fileURL)
+        guard let base = URL(string: baseURL), let endpoint = URL(string: "api/videos", relativeTo: base) else {
+            throw NSError(domain: "LerizAPI", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid Leriz server URL."])
+        }
+        let ext = fileURL.pathExtension.lowercased()
+        let allowed = Set(["mp4", "mov", "m4v", "webm"])
+        let fileExt = allowed.contains(ext) ? ext : "mp4"
+        let mime = fileExt == "mov" ? "video/quicktime" : fileExt == "webm" ? "video/webm" : "video/mp4"
         let boundary = "LerizBoundary-\(UUID().uuidString)"
-        var body = Data()
-        func append(_ value: String) { body.append(Data(value.utf8)) }
-        append("--\(boundary)\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\(title)\r\n")
-        append("--\(boundary)\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n\(caption)\r\n")
-        append("--\(boundary)\r\nContent-Disposition: form-data; name=\"video\"; filename=\"leriz-upload.mp4\"\r\nContent-Type: video/mp4\r\n\r\n")
-        body.append(video)
-        append("\r\n--\(boundary)--\r\n")
-        _ = try await request("api/videos", method: "POST", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
+        let multipartURL = FileManager.default.temporaryDirectory.appendingPathComponent("Leriz-upload-\(UUID().uuidString).multipart")
+        guard FileManager.default.createFile(atPath: multipartURL.path, contents: nil) else {
+            throw NSError(domain: "LerizAPI", code: 3, userInfo: [NSLocalizedDescriptionKey: "Could not prepare the upload."])
+        }
+        defer { try? FileManager.default.removeItem(at: multipartURL) }
+        let output = try FileHandle(forWritingTo: multipartURL)
+        defer { try? output.close() }
+        func write(_ value: String) { output.write(Data(value.utf8)) }
+        write("--\(boundary)\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\(title)\r\n")
+        write("--\(boundary)\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n\(caption)\r\n")
+        write("--\(boundary)\r\nContent-Disposition: form-data; name=\"video\"; filename=\"leriz-upload.\(fileExt)\"\r\nContent-Type: \(mime)\r\n\r\n")
+        let input = try FileHandle(forReadingFrom: fileURL)
+        defer { try? input.close() }
+        while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            output.write(chunk)
+        }
+        write("\r\n--\(boundary)--\r\n")
+        try output.synchronize()
+        try output.close()
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 7200
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.setValue("true", forHTTPHeaderField: "ngrok-skip-browser-warning")
+        if !token.isEmpty { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 7200
+        config.timeoutIntervalForResource = 7200
+        let session = URLSession(configuration: config)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.upload(for: req, fromFile: multipartURL)
+        guard let http = response as? HTTPURLResponse else {
+            throw NSError(domain: "LerizAPI", code: 2, userInfo: [NSLocalizedDescriptionKey: "Invalid response from Leriz server."])
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+            throw NSError(domain: "LerizAPI", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: json["error"] as? String ?? "Upload failed (HTTP \(http.statusCode))."])
+        }
     }
 
     static func registerViewIfNeeded(videoID: String, username: String) async {
@@ -2860,7 +2896,17 @@ struct CreateVideoPage: View {
                                 }
                             }
                         } else {
-                            ARFaceFilterPreview(selectedFilter: selectedFilter)
+                            ZStack {
+                                CameraCapturePreview(session: recorder.session)
+                                VStack {
+                                    Spacer()
+                                    Text(selectedFilter == "Original" || selectedFilter == "None" ? "" :
+                                         (selectedFilter == "Glasses" ? "🤓" : selectedFilter == "Cat" ? "😺" : selectedFilter == "Crown" ? "👑" : selectedFilter == "Dog" ? "🐶" : "🤖"))
+                                        .font(.system(size: 64))
+                                        .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
+                                        .padding(.bottom, 70)
+                                }
+                            }
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -3888,8 +3934,9 @@ final class LoopCameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputR
 
     func start(completion: @escaping (String?) -> Void) {
         sessionQueue.async {
+            if !self.session.isRunning { self.session.startRunning() }
             guard self.session.isRunning else {
-                DispatchQueue.main.async { completion("Camera is not ready yet. Try again.") }
+                DispatchQueue.main.async { completion("Camera could not start. Close other camera screens and try again.") }
                 return
             }
             guard !self.movieOutput.isRecording else { return }
