@@ -30,7 +30,7 @@ struct LerizServerConfiguration: Decodable {
             return LerizServerConfiguration(
                 appName: "Leriz",
                 iconPath: nil,
-                serverUrl: "https://parliament-congratulations-casting-manufacturing.trycloudflare.com"
+                serverUrl: "https://bce23aa947fb67.lhr.life"
             )
         }
         return config
