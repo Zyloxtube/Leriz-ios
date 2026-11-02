@@ -762,7 +762,7 @@ struct LoopFeedView: View {
             }
         }
         .sheet(isPresented: $showInbox) { InboxSheet() }
-        .sheet(isPresented: $showChat) { LerizChatListView() }
+        .fullScreenCover(isPresented: $showChat) { LerizChatListView() }
         .sheet(isPresented: $showShare) { ShareSheet(clip: clips[selectedClip]) }
         .sheet(item: $selectedSongClip) { songClip in
             SongDetailSheet(clip: songClip, clips: clips) { chosenClip in
