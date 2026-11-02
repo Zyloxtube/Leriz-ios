@@ -3019,7 +3019,7 @@ struct LerizChatThreadView: View {
             let safe = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
             _ = try await LerizAPI.request("api/chat/conversations/\(safe)/messages", method: "POST", body: body)
             await load()
-        } catch { error = error.localizedDescription; text = value }
+        } catch { self.error = error.localizedDescription; text = value }
     }
     @MainActor private func upload(_ item: PhotosPickerItem?, field: String, path: String) async {
         guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }
