@@ -99,51 +99,106 @@ struct LerizAPI {
     }
 
     static func uploadVideo(fileURL: URL, title: String, caption: String) async throws {
-        guard let base = URL(string: baseURL), let endpoint = URL(string: "api/videos", relativeTo: base) else {
-            throw NSError(domain: "LerizAPI", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid Leriz server URL."])
+        guard let base = URL(string: baseURL),
+              let endpoint = URL(string: "api/videos", relativeTo: base) else {
+            throw NSError(domain: "LerizAPI", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid Leriz server URL."
+            ])
         }
+
         let ext = fileURL.pathExtension.lowercased()
         let allowed = Set(["mp4", "mov", "m4v", "webm"])
         let fileExt = allowed.contains(ext) ? ext : "mp4"
-        let mime = fileExt == "mov" ? "video/quicktime" : fileExt == "webm" ? "video/webm" : "video/mp4"
-        let boundary = "LerizBoundary-\(UUID().uuidString)"
-        let multipartURL = FileManager.default.temporaryDirectory.appendingPathComponent("Leriz-upload-\(UUID().uuidString).multipart")
-        guard FileManager.default.createFile(atPath: multipartURL.path, contents: nil) else {
-            throw NSError(domain: "LerizAPI", code: 3, userInfo: [NSLocalizedDescriptionKey: "Could not prepare the upload."])
+
+        let mime: String
+        switch fileExt {
+        case "mov":
+            mime = "video/quicktime"
+        case "webm":
+            mime = "video/webm"
+        case "m4v":
+            mime = "video/x-m4v"
+        default:
+            mime = "video/mp4"
         }
-        defer { try? FileManager.default.removeItem(at: multipartURL) }
-        let output = try FileHandle(forWritingTo: multipartURL)
-        defer { try? output.close() }
-        func write(_ value: String) { output.write(Data(value.utf8)) }
-        write("--\(boundary)\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\(title)\r\n")
-        write("--\(boundary)\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n\(caption)\r\n")
-        write("--\(boundary)\r\nContent-Disposition: form-data; name=\"video\"; filename=\"leriz-upload.\(fileExt)\"\r\nContent-Type: \(mime)\r\n\r\n")
-        let input = try FileHandle(forReadingFrom: fileURL)
-        defer { try? input.close() }
-        while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
-            output.write(chunk)
+
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            throw NSError(domain: "LerizAPI", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "The video file could not be found."
+            ])
         }
-        write("\r\n--\(boundary)--\r\n")
-        try output.synchronize()
-        try output.close()
-        var req = URLRequest(url: endpoint)
+
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let fileSize = (fileAttributes[.size] as? NSNumber)?.int64Value ?? 0
+        guard fileSize > 0 else {
+            throw NSError(domain: "LerizAPI", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "The selected video is empty."
+            ])
+        }
+
+        // The server accepts the video as a raw request body. Put metadata in the
+        // query string so Unicode titles/captions are safely percent-encoded.
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: true) else {
+            throw NSError(domain: "LerizAPI", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Could not prepare the upload URL."
+            ])
+        }
+
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { ["filename", "title", "caption"].contains($0.name) }
+        queryItems.append(URLQueryItem(name: "filename", value: "leriz-upload.\(fileExt)"))
+        queryItems.append(URLQueryItem(name: "title", value: title))
+        queryItems.append(URLQueryItem(name: "caption", value: caption))
+        components.queryItems = queryItems
+
+        guard let uploadURL = components.url else {
+            throw NSError(domain: "LerizAPI", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Could not prepare the upload URL."
+            ])
+        }
+
+        var req = URLRequest(url: uploadURL)
         req.httpMethod = "POST"
         req.timeoutInterval = 7200
-        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        req.setValue(mime, forHTTPHeaderField: "X-Video-Content-Type")
+        req.setValue("leriz-upload.\(fileExt)", forHTTPHeaderField: "X-Video-Filename")
         req.setValue("true", forHTTPHeaderField: "ngrok-skip-browser-warning")
-        if !token.isEmpty { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+
+        guard !token.isEmpty else {
+            throw NSError(domain: "LerizAPI", code: 401, userInfo: [
+                NSLocalizedDescriptionKey: "Authentication required. Please sign in again."
+            ])
+        }
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 7200
         config.timeoutIntervalForResource = 7200
         let session = URLSession(configuration: config)
         defer { session.finishTasksAndInvalidate() }
-        let (data, response) = try await session.upload(for: req, fromFile: multipartURL)
+
+        // Upload the original file directly: no multipart body and no extra copy.
+        let (data, response) = try await session.upload(for: req, fromFile: fileURL)
+
         guard let http = response as? HTTPURLResponse else {
-            throw NSError(domain: "LerizAPI", code: 2, userInfo: [NSLocalizedDescriptionKey: "Invalid response from Leriz server."])
+            throw NSError(domain: "LerizAPI", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid response from Leriz server."
+            ])
         }
+
         guard (200...299).contains(http.statusCode) else {
             let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-            throw NSError(domain: "LerizAPI", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: json["error"] as? String ?? "Upload failed (HTTP \(http.statusCode))."])
+            throw NSError(domain: "LerizAPI", code: http.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: json["error"] as? String ?? "Upload failed (HTTP \(http.statusCode))."
+            ])
+        }
+
+        let result = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        guard result["ok"] as? Bool == true else {
+            throw NSError(domain: "LerizAPI", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: result["error"] as? String ?? "The server did not confirm the video upload."
+            ])
         }
     }
 
