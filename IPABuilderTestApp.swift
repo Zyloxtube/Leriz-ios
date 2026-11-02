@@ -30,7 +30,7 @@ struct LerizServerConfiguration: Decodable {
             return LerizServerConfiguration(
                 appName: "Leriz",
                 iconPath: nil,
-                serverUrl: "https://bce23aa947fb67.lhr.life"
+                serverUrl: "https://tiger-9064.portbuddy.dev"
             )
         }
         return config
