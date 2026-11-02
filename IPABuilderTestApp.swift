@@ -2870,6 +2870,31 @@ private func chatLast(_ row: [String: Any]) -> String {
     }
 }
 
+struct ChatBubbleCorners: Shape {
+    var topLeading: CGFloat
+    var bottomLeading: CGFloat
+    var bottomTrailing: CGFloat
+    var topTrailing: CGFloat
+    func path(in rect: CGRect) -> Path {
+        let tl = min(topLeading, min(rect.width, rect.height) / 2)
+        let bl = min(bottomLeading, min(rect.width, rect.height) / 2)
+        let br = min(bottomTrailing, min(rect.width, rect.height) / 2)
+        let tr = min(topTrailing, min(rect.width, rect.height) / 2)
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX + tl, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX - tr, y: rect.minY))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + tr), control: CGPoint(x: rect.maxX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX - br, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX + bl, y: rect.maxY))
+        p.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - bl), control: CGPoint(x: rect.minX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + tl))
+        p.addQuadCurve(to: CGPoint(x: rect.minX + tl, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
+        p.closeSubpath()
+        return p
+    }
+}
+
 struct LerizChatThreadView: View {
     let conversation: [String: Any]
     let onChanged: () -> Void
@@ -2957,8 +2982,7 @@ struct LerizChatThreadView: View {
                 if !value.isEmpty {
                     Text(value).font(.system(size: 15)).foregroundStyle(mine ? .white : .black)
                         .padding(.horizontal, 13).padding(.vertical, 9)
-                        .background(mine ? Color.purple : Color.white,
-                            in: UnevenRoundedRectangle(topLeadingRadius: mine ? 19 : 4, bottomLeadingRadius: 19, bottomTrailingRadius: 19, topTrailingRadius: mine ? 4 : 19))
+                        .background(ChatBubbleCorners(topLeading: mine ? 19 : 4, bottomLeading: 19, bottomTrailing: 19, topTrailing: mine ? 4 : 19).fill(mine ? Color.purple : Color.white))
                 }
             }
             if !mine { Spacer(minLength: 30) }
