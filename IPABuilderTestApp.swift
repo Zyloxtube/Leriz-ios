@@ -2817,7 +2817,7 @@ struct LerizChatListView: View {
             let (data, _) = try await LerizAPI.request("api/chat/conversations")
             rows = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["conversations"] as? [[String: Any]] ?? []
             error = ""
-        } catch { error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription }
         loading = false
     }
     @MainActor private func search(_ value: String) async {
@@ -2835,7 +2835,7 @@ struct LerizChatListView: View {
             _ = try await LerizAPI.request("api/chat/direct", method: "POST", body: body)
             showNew = false
             await load()
-        } catch { error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription }
     }
     @MainActor private func createGroup() async {
         let members = memberNames.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -2844,7 +2844,7 @@ struct LerizChatListView: View {
             _ = try await LerizAPI.request("api/chat/groups", method: "POST", body: body)
             groupName = ""; memberNames = ""
             await load()
-        } catch { error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription }
     }
 }
 
@@ -2966,7 +2966,7 @@ struct LerizChatThreadView: View {
     @ViewBuilder private func messageBubble(_ m: [String: Any]) -> some View {
         let sender = m["sender"] as? [String: Any] ?? m["user"] as? [String: Any] ?? [:]
         let senderName = sender["username"] as? String ?? m["username"] as? String ?? ""
-        let mine = (m["isMine"] as? Bool) ?? senderName.caseInsensitiveCompare(username) == .orderedSame
+        let mine = (m["isMine"] as? Bool) ?? (senderName.caseInsensitiveCompare(username) == .orderedSame)
         let value = m["text"] as? String ?? ""
         let media = m["mediaURL"] as? String ?? m["media_url"] as? String ?? ""
         HStack(alignment: .bottom, spacing: 7) {
@@ -3000,7 +3000,7 @@ struct LerizChatThreadView: View {
             messages = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["messages"] as? [[String: Any]] ?? []
             _ = try? await LerizAPI.request("api/chat/conversations/\(safe)/read", method: "POST", body: Data("{}".utf8))
             error = ""
-        } catch { error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription }
     }
     private func startPolling() {
         refresh = Task {
@@ -3032,7 +3032,7 @@ struct LerizChatThreadView: View {
             let safe = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
             _ = try await LerizAPI.request("api/chat/conversations/\(safe)/\(path)", method: "POST", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
             if path == "media" { await load() } else { onChanged() }
-        } catch { error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription }
         if path == "media" { messagePhoto = nil } else { groupPhoto = nil }
     }
     @MainActor private func saveName() async {
@@ -3041,7 +3041,7 @@ struct LerizChatThreadView: View {
             let safe = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
             _ = try await LerizAPI.request("api/chat/conversations/\(safe)/name", method: "PATCH", body: body)
             onChanged()
-        } catch { error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription }
     }
 }
 
