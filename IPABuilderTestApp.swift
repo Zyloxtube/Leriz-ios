@@ -760,7 +760,7 @@ struct LoopFeedView: View {
                 }
             }
         }
-        .sheet(isPresented: $showInbox) { InboxSheet() }
+        .sheet(isPresented: $showInbox) { LerizChatListView() }
         .sheet(isPresented: $showShare) { ShareSheet(clip: clips[selectedClip]) }
         .sheet(item: $selectedSongClip) { songClip in
             SongDetailSheet(clip: songClip, clips: clips) { chosenClip in
@@ -876,7 +876,7 @@ struct LoopFeedView: View {
                 }
             }
             Spacer()
-            navButton("text.bubble", title: "Inbox", selected: false) { showInbox = true }
+            navButton("bubble.left.and.bubble.right", title: "Chat", selected: false) { showInbox = true }
             Spacer()
             navButton("person.crop.circle", title: "Profile", selected: false) { selectedProfileClip = nil; showProfile = true }
         }
@@ -2720,6 +2720,299 @@ struct EditProfileDemo: View {
                     }
                 }
         }.preferredColorScheme(.dark)
+    }
+}
+
+
+struct LerizChatListView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var rows: [[String: Any]] = []
+    @State private var users: [[String: Any]] = []
+    @State private var query = ""
+    @State private var loading = true
+    @State private var error = ""
+    @State private var showNew = false
+    @State private var showGroup = false
+    @State private var groupName = ""
+    @State private var memberNames = ""
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if loading { ProgressView("Loading chats…").tint(.white).frame(maxWidth: .infinity, maxHeight: .infinity) }
+                else if rows.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 42)).foregroundStyle(.purple)
+                        Text(error.isEmpty ? "No conversations yet" : error).font(.headline)
+                        Button("New message") { showNew = true }.buttonStyle(.borderedProminent).tint(.purple)
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List(rows.indices, id: \.self) { i in
+                        let row = rows[i]
+                        NavigationLink {
+                            LerizChatThreadView(conversation: row) { Task { await load() } }
+                        } label: {
+                            HStack(spacing: 12) {
+                                chatAvatar(row["imageURL"] as? String ?? row["imageUrl"] as? String ?? "", 50)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(chatName(row)).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                                    Text(chatLast(row)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }.padding(.vertical, 5)
+                        }.listRowBackground(Color.black)
+                    }.listStyle(.plain).scrollContentBackground(.hidden)
+                }
+            }
+            .background(Color.black)
+            .navigationTitle("Messages").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { showNew = true } label: { Image(systemName: "square.and.pencil") }
+                    Button { showGroup = true } label: { Image(systemName: "person.2.badge.plus") }
+                }
+            }
+            .task { await load() }
+            .sheet(isPresented: $showNew) {
+                NavigationStack {
+                    VStack {
+                        TextField("Search username", text: $query)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .padding(12).background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                            .padding()
+                            .onChange(of: query) { value in Task { await search(value) } }
+                        List(users.indices, id: \.self) { i in
+                            let user = users[i]
+                            Button { Task { await startDirect(user) } } label: {
+                                HStack(spacing: 12) {
+                                    chatAvatar(user["avatarURL"] as? String ?? user["avatar_url"] as? String ?? "", 42)
+                                    VStack(alignment: .leading) {
+                                        Text(user["displayName"] as? String ?? user["username"] as? String ?? "User").foregroundStyle(.white)
+                                        Text("@\(user["username"] as? String ?? "")").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }.listRowBackground(Color.black)
+                        }.scrollContentBackground(.hidden)
+                    }.background(Color.black).navigationTitle("New message").toolbar {
+                        ToolbarItem(placement: .topBarLeading) { Button("Cancel") { showNew = false } }
+                    }
+                }.preferredColorScheme(.dark)
+            }
+            .alert("Create group", isPresented: $showGroup) {
+                TextField("Group name", text: $groupName)
+                TextField("Member usernames, comma separated", text: $memberNames)
+                Button("Cancel", role: .cancel) {}
+                Button("Create") { Task { await createGroup() } }
+            }
+        }.preferredColorScheme(.dark)
+    }
+
+    @MainActor private func load() async {
+        loading = true
+        do {
+            let (data, _) = try await LerizAPI.request("api/chat/conversations")
+            rows = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["conversations"] as? [[String: Any]] ?? []
+            error = ""
+        } catch { error = error.localizedDescription }
+        loading = false
+    }
+    @MainActor private func search(_ value: String) async {
+        guard !value.trimmingCharacters(in: .whitespaces).isEmpty else { users = []; return }
+        do {
+            let q = value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
+            let (data, _) = try await LerizAPI.request("api/chat/users?q=\(q)")
+            users = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["users"] as? [[String: Any]] ?? []
+        } catch { users = [] }
+    }
+    @MainActor private func startDirect(_ user: [String: Any]) async {
+        let id = user["userID"] ?? user["userId"] ?? user["user_id"] ?? user["id"] ?? ""
+        do {
+            let body = try JSONSerialization.data(withJSONObject: ["userID": id])
+            _ = try await LerizAPI.request("api/chat/direct", method: "POST", body: body)
+            showNew = false
+            await load()
+        } catch { error = error.localizedDescription }
+    }
+    @MainActor private func createGroup() async {
+        let members = memberNames.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        do {
+            let body = try JSONSerialization.data(withJSONObject: ["name": groupName, "members": members])
+            _ = try await LerizAPI.request("api/chat/groups", method: "POST", body: body)
+            groupName = ""; memberNames = ""
+            await load()
+        } catch { error = error.localizedDescription }
+    }
+}
+
+private func chatName(_ row: [String: Any]) -> String {
+    if let n = row["name"] as? String, !n.isEmpty { return n }
+    if let n = row["title"] as? String, !n.isEmpty { return n }
+    if let members = row["members"] as? [[String: Any]],
+       let other = members.first(where: { ($0["isMe"] as? Bool) != true }) {
+        return other["displayName"] as? String ?? other["username"] as? String ?? "Chat"
+    }
+    return "Chat"
+}
+private func chatLast(_ row: [String: Any]) -> String {
+    let last = row["lastMessage"] as? [String: Any] ?? row["last_message"] as? [String: Any] ?? [:]
+    return last["text"] as? String ?? row["lastMessageText"] as? String ?? "Start a conversation"
+}
+@ViewBuilder private func chatAvatar(_ raw: String, _ size: CGFloat) -> some View {
+    let urlText = raw.hasPrefix("http") ? raw : (raw.isEmpty ? "" : LerizAPI.baseURL + (raw.hasPrefix("/") ? raw : "/" + raw))
+    if let url = URL(string: urlText), !urlText.isEmpty {
+        AsyncImage(url: url) { phase in
+            if let image = phase.image { image.resizable().scaledToFill() }
+            else { Circle().fill(.white.opacity(0.12)).overlay(Image(systemName: "person.fill").foregroundStyle(.white.opacity(0.55))) }
+        }.frame(width: size, height: size).clipShape(Circle())
+    } else {
+        Circle().fill(.white.opacity(0.12)).frame(width: size, height: size)
+            .overlay(Image(systemName: "person.fill").foregroundStyle(.white.opacity(0.55)))
+    }
+}
+
+struct LerizChatThreadView: View {
+    let conversation: [String: Any]
+    let onChanged: () -> Void
+    @AppStorage("lerizUsername") private var username = ""
+    @State private var messages: [[String: Any]] = []
+    @State private var text = ""
+    @State private var error = ""
+    @State private var rename = false
+    @State private var groupName = ""
+    @State private var groupPhoto: PhotosPickerItem?
+    @State private var messagePhoto: PhotosPickerItem?
+    @State private var refresh: Task<Void, Never>?
+    private var id: String { String(describing: conversation["id"] ?? "") }
+    private var isGroup: Bool { conversation["type"] as? String == "group" }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                if isGroup {
+                    PhotosPicker(selection: $groupPhoto, matching: .images) {
+                        chatAvatar(conversation["imageURL"] as? String ?? conversation["imageUrl"] as? String ?? "", 42)
+                    }.onChange(of: groupPhoto) { item in Task { await upload(item, field: "image", path: "image") } }
+                } else { chatAvatar(conversation["imageURL"] as? String ?? "", 42) }
+                Button { if isGroup { groupName = chatName(conversation); rename = true } } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(chatName(conversation)).font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
+                        Text(isGroup ? "Group · tap to edit" : "Direct message").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }.buttonStyle(.plain)
+                Spacer()
+                if isGroup { Button { groupName = chatName(conversation); rename = true } label: { Image(systemName: "pencil").foregroundStyle(.white) } }
+            }.padding(12)
+            Divider().overlay(.white.opacity(0.12))
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 9) {
+                        ForEach(messages.indices, id: \.self) { i in
+                            let m = messages[i]
+                            messageBubble(m).id(i)
+                        }
+                    }.padding(12)
+                }.onChange(of: messages.count) { _ in if !messages.isEmpty { proxy.scrollTo(messages.count - 1, anchor: .bottom) } }
+            }
+            HStack(spacing: 10) {
+                PhotosPicker(selection: $messagePhoto, matching: .images) {
+                    Image(systemName: "photo").font(.system(size: 21)).foregroundStyle(.purple)
+                }.onChange(of: messagePhoto) { item in Task { await upload(item, field: "file", path: "media") } }
+                TextField("Message…", text: $text, axis: .vertical).lineLimit(1...4)
+                    .padding(.horizontal, 14).padding(.vertical, 10).background(.white.opacity(0.09), in: Capsule())
+                Button { Task { await send() } } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)).foregroundStyle(.purple) }
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }.padding(12)
+        }
+        .background(Color.black)
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await load(); startPolling() }
+        .onDisappear { refresh?.cancel() }
+        .alert("Edit group name", isPresented: $rename) {
+            TextField("Group name", text: $groupName)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") { Task { await saveName() } }
+        }
+    }
+
+    @ViewBuilder private func messageBubble(_ m: [String: Any]) -> some View {
+        let sender = m["sender"] as? [String: Any] ?? m["user"] as? [String: Any] ?? [:]
+        let senderName = sender["username"] as? String ?? m["username"] as? String ?? ""
+        let mine = (m["isMine"] as? Bool) ?? senderName.caseInsensitiveCompare(username) == .orderedSame
+        let value = m["text"] as? String ?? ""
+        let media = m["mediaURL"] as? String ?? m["media_url"] as? String ?? ""
+        HStack(alignment: .bottom, spacing: 7) {
+            if !mine { chatAvatar(sender["avatarURL"] as? String ?? sender["avatar_url"] as? String ?? "", 27) }
+            VStack(alignment: mine ? .trailing : .leading, spacing: 4) {
+                if isGroup && !mine { Text(senderName).font(.caption2).foregroundStyle(.secondary) }
+                if !media.isEmpty {
+                    let urlString = media.hasPrefix("http") ? media : LerizAPI.baseURL + (media.hasPrefix("/") ? media : "/" + media)
+                    if let url = URL(string: urlString) {
+                        AsyncImage(url: url) { phase in
+                            if let image = phase.image { image.resizable().scaledToFit().frame(maxWidth: 230, maxHeight: 250).clipShape(RoundedRectangle(cornerRadius: 13)) }
+                            else { ProgressView().tint(.white) }
+                        }
+                    }
+                }
+                if !value.isEmpty {
+                    Text(value).font(.system(size: 15)).foregroundStyle(mine ? .white : .black)
+                        .padding(.horizontal, 13).padding(.vertical, 9)
+                        .background(mine ? Color.purple : Color.white,
+                            in: UnevenRoundedRectangle(topLeadingRadius: mine ? 19 : 4, bottomLeadingRadius: 19, bottomTrailingRadius: 19, topTrailingRadius: mine ? 4 : 19))
+                }
+            }
+            Spacer(minLength: 30)
+        }.frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+    }
+
+    @MainActor private func load() async {
+        do {
+            let safe = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+            let (data, _) = try await LerizAPI.request("api/chat/conversations/\(safe)/messages")
+            messages = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["messages"] as? [[String: Any]] ?? []
+            _ = try? await LerizAPI.request("api/chat/conversations/\(safe)/read", method: "POST", body: Data("{}".utf8))
+            error = ""
+        } catch { error = error.localizedDescription }
+    }
+    private func startPolling() {
+        refresh = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if !Task.isCancelled { await load() }
+            }
+        }
+    }
+    @MainActor private func send() async {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        text = ""
+        do {
+            let body = try JSONSerialization.data(withJSONObject: ["text": value])
+            let safe = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+            _ = try await LerizAPI.request("api/chat/conversations/\(safe)/messages", method: "POST", body: body)
+            await load()
+        } catch { error = error.localizedDescription; text = value }
+    }
+    @MainActor private func upload(_ item: PhotosPickerItem?, field: String, path: String) async {
+        guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }
+        let boundary = "Leriz-\(UUID().uuidString)"
+        var body = Data()
+        body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(field)\"; filename=\"image.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+        body.append(data)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        do {
+            let safe = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+            _ = try await LerizAPI.request("api/chat/conversations/\(safe)/\(path)", method: "POST", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
+            if path == "media" { await load() } else { onChanged() }
+        } catch { error = error.localizedDescription }
+        if path == "media" { messagePhoto = nil } else { groupPhoto = nil }
+    }
+    @MainActor private func saveName() async {
+        do {
+            let body = try JSONSerialization.data(withJSONObject: ["name": groupName])
+            let safe = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+            _ = try await LerizAPI.request("api/chat/conversations/\(safe)/name", method: "PATCH", body: body)
+            onChanged()
+        } catch { error = error.localizedDescription }
     }
 }
 
