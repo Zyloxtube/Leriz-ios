@@ -716,6 +716,7 @@ struct LoopFeedView: View {
     @State private var feedLoadingMore = false
     @State private var activeFeedMode = "forYou"
     @State private var showCreate = false
+    @State private var showUploadError = false
     @State private var likedIDs: Set<Int> = []
     @State private var savedIDs: Set<Int> = []
     @State private var selectedTab = "For You"
@@ -835,6 +836,7 @@ struct LoopFeedView: View {
                         await MainActor.run {
                             feedError = "Upload failed: \(error.localizedDescription)"
                             showCreate = false
+                            showUploadError = true
                         }
                     }
                 }
@@ -847,6 +849,11 @@ struct LoopFeedView: View {
             SongDetailSheet(clip: songClip, clips: clips) { chosenClip in
                 if let index = clips.firstIndex(where: { $0.id == chosenClip.id }) { selectedClip = index }
             }
+        }
+        .alert("Upload failed", isPresented: $showUploadError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(feedError)
         }
     }
 
