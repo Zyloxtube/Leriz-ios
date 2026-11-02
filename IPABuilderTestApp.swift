@@ -2899,6 +2899,19 @@ struct ChatBubbleCorners: Shape {
     }
 }
 
+private func chatMessageRows(_ data: Data) -> [[String: Any]] {
+    guard let root = try? JSONSerialization.jsonObject(with: data) else { return [] }
+    func rows(_ value: Any, depth: Int = 0) -> [[String: Any]]? {
+        if let array = value as? [[String: Any]] { return array }
+        guard depth < 4, let object = value as? [String: Any] else { return nil }
+        for key in ["messages", "items", "results", "data"] {
+            if let child = object[key], let found = rows(child, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+    return rows(root) ?? []
+}
+
 struct LerizChatThreadView: View {
     let conversation: [String: Any]
     let onChanged: () -> Void
@@ -2965,10 +2978,10 @@ struct LerizChatThreadView: View {
 
     @ViewBuilder private func messageBubble(_ m: [String: Any]) -> some View {
         let sender = m["sender"] as? [String: Any] ?? m["user"] as? [String: Any] ?? [:]
-        let senderName = sender["username"] as? String ?? m["username"] as? String ?? ""
-        let mine = (m["isMine"] as? Bool) ?? (senderName.caseInsensitiveCompare(username) == .orderedSame)
-        let value = m["text"] as? String ?? ""
-        let media = m["mediaURL"] as? String ?? m["media_url"] as? String ?? ""
+        let senderName = sender["username"] as? String ?? sender["handle"] as? String ?? m["username"] as? String ?? m["senderUsername"] as? String ?? m["sender_username"] as? String ?? ""
+        let mine = (m["isMine"] as? Bool) ?? (m["is_mine"] as? Bool) ?? (m["own"] as? Bool) ?? (senderName.caseInsensitiveCompare(username) == .orderedSame)
+        let value = m["text"] as? String ?? m["content"] as? String ?? m["body"] as? String ?? ""
+        let media = m["mediaURL"] as? String ?? m["mediaUrl"] as? String ?? m["media_url"] as? String ?? m["imageURL"] as? String ?? m["image_url"] as? String ?? m["fileURL"] as? String ?? m["file_url"] as? String ?? ""
         HStack(alignment: .bottom, spacing: 7) {
             if !mine { chatAvatar(sender["avatarURL"] as? String ?? sender["avatar_url"] as? String ?? "", 27) }
             if mine { Spacer(minLength: 30) }
@@ -2997,7 +3010,7 @@ struct LerizChatThreadView: View {
         do {
             let safe = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
             let (data, _) = try await LerizAPI.request("api/chat/conversations/\(safe)/messages")
-            messages = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["messages"] as? [[String: Any]] ?? []
+            messages = chatMessageRows(data)
             _ = try? await LerizAPI.request("api/chat/conversations/\(safe)/read", method: "POST", body: Data("{}".utf8))
             error = ""
         } catch { self.error = error.localizedDescription }
