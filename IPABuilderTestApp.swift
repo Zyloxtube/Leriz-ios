@@ -68,37 +68,41 @@ struct LerizAPI {
         let (data, _) = try await request("api/feed?mode=\(safeMode)&limit=\(max(1, min(limit, 24)))&offset=\(max(0, offset))")
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         let rows = json["videos"] as? [[String: Any]] ?? []
-        return rows.compactMap { row in
-            guard let id = row["id"] as? String, !id.isEmpty else { return nil }
-            let user = row["user"] as? [String: Any] ?? [:]
-            let username = user["username"] as? String ?? user["handle"] as? String ?? "user"
-            let display = user["displayName"] as? String ?? user["display_name"] as? String ?? username
-            let rawURL = row["videoURL"] as? String ?? row["videoUrl"] as? String ?? row["url"] as? String ?? "/api/videos/\(id)/file"
-            let url = URL(string: rawURL)?.scheme == nil ? baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + (rawURL.hasPrefix("/") ? rawURL : "/\(rawURL)") : rawURL
-            let rawCaption = row["caption"] as? String ?? ""
-            let serverTitle = row["title"] as? String ?? ""
-            let legacyMarker = "\u{001E}LERIZ_TITLE:"
-            let title: String
-            let caption: String
-            if rawCaption.hasPrefix(legacyMarker), let newline = rawCaption.firstIndex(of: "\n") {
-                let legacyTitle = String(rawCaption[rawCaption.index(rawCaption.startIndex, offsetBy: legacyMarker.count)..<newline])
-                title = serverTitle.isEmpty ? legacyTitle : serverTitle
-                caption = String(rawCaption[rawCaption.index(after: newline)...])
-            } else {
-                title = serverTitle
-                caption = rawCaption
-            }
-            let likes = row["likes"] as? Int ?? 0
-            let comments = row["comments"] as? Int ?? 0
-            var clip = FeedClip(id: abs(id.hashValue % 2_000_000_000), creator: display, handle: "@\(username)", caption: caption, title: title, tags: "", song: "original audio · \(username)", likes: String(likes), comments: String(comments), views: row["views"] as? Int ?? 0, accent: .purple, videoURL: url, symbol: "person")
-            clip.avatarURL = user["avatarURL"] as? String ?? user["avatar_url"] as? String ?? ""
-            clip.initiallyLiked = row["likedByMe"] as? Bool ?? false
-            clip.initiallySaved = row["savedByMe"] as? Bool ?? false
-            return clip
-        }
+        return rows.compactMap { makeFeedClip(from: $0) }
     }
 
-    static func uploadVideo(fileURL: URL, title: String, caption: String) async throws {
+    private static func makeFeedClip(from row: [String: Any]) -> FeedClip? {
+        guard let id = row["id"] as? String, !id.isEmpty else { return nil }
+        let user = row["user"] as? [String: Any] ?? [:]
+        let username = user["username"] as? String ?? user["handle"] as? String ?? "user"
+        let display = user["displayName"] as? String ?? user["display_name"] as? String ?? username
+        let rawURL = row["videoURL"] as? String ?? row["videoUrl"] as? String ?? row["url"] as? String ?? "/api/videos/\(id)/file"
+        let url = URL(string: rawURL)?.scheme == nil
+            ? baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + (rawURL.hasPrefix("/") ? rawURL : "/\(rawURL)")
+            : rawURL
+        let rawCaption = row["caption"] as? String ?? ""
+        let serverTitle = row["title"] as? String ?? ""
+        let legacyMarker = "\u{001E}LERIZ_TITLE:"
+        let title: String
+        let caption: String
+        if rawCaption.hasPrefix(legacyMarker), let newline = rawCaption.firstIndex(of: "\n") {
+            let legacyTitle = String(rawCaption[rawCaption.index(rawCaption.startIndex, offsetBy: legacyMarker.count)..<newline])
+            title = serverTitle.isEmpty ? legacyTitle : serverTitle
+            caption = String(rawCaption[rawCaption.index(after: newline)...])
+        } else {
+            title = serverTitle
+            caption = rawCaption
+        }
+        let likes = row["likes"] as? Int ?? 0
+        let comments = row["comments"] as? Int ?? 0
+        var clip = FeedClip(id: abs(id.hashValue % 2_000_000_000), creator: display, handle: "@\(username)", caption: caption, title: title, tags: "", song: "original audio · \(username)", likes: String(likes), comments: String(comments), views: row["views"] as? Int ?? 0, accent: .purple, videoURL: url, symbol: "person")
+        clip.avatarURL = user["avatarURL"] as? String ?? user["avatar_url"] as? String ?? ""
+        clip.initiallyLiked = row["likedByMe"] as? Bool ?? false
+        clip.initiallySaved = row["savedByMe"] as? Bool ?? false
+        return clip
+    }
+
+    static func uploadVideo(fileURL: URL, title: String, caption: String) async throws -> FeedClip {
         guard let base = URL(string: baseURL),
               let endpoint = URL(string: "api/videos", relativeTo: base) else {
             throw NSError(domain: "LerizAPI", code: 1, userInfo: [
@@ -200,6 +204,18 @@ struct LerizAPI {
                 NSLocalizedDescriptionKey: result["error"] as? String ?? "The server did not confirm the video upload."
             ])
         }
+
+        // Insert the exact video returned by POST. The For You feed can omit
+        // the current user's newest upload because it is ranked separately.
+        let createdVideo = result["video"] as? [String: Any]
+            ?? result["data"] as? [String: Any]
+            ?? result
+        guard let clip = makeFeedClip(from: createdVideo) else {
+            throw NSError(domain: "LerizAPI", code: 5, userInfo: [
+                NSLocalizedDescriptionKey: "The server accepted the upload but did not return a usable video ID."
+            ])
+        }
+        return clip
     }
 
     static func registerViewIfNeeded(videoID: String, username: String) async {
@@ -804,14 +820,22 @@ struct LoopFeedView: View {
             CreateVideoPage { title, caption, mediaURL in
                 Task {
                     do {
-                        try await LerizAPI.uploadVideo(fileURL: mediaURL, title: title, caption: caption)
-                        await loadFeed()
+                        let uploadedClip = try await LerizAPI.uploadVideo(fileURL: mediaURL, title: title, caption: caption)
                         await MainActor.run {
+                            if let serverID = uploadedClip.serverID {
+                                clips.removeAll { $0.serverID == serverID }
+                            }
+                            clips.insert(uploadedClip, at: 0)
                             selectedClip = 0
+                            feedHasMore = true
+                            feedError = ""
                             showCreate = false
                         }
                     } catch {
-                        await MainActor.run { feedError = "Upload failed: \(error.localizedDescription)" }
+                        await MainActor.run {
+                            feedError = "Upload failed: \(error.localizedDescription)"
+                            showCreate = false
+                        }
                     }
                 }
             }
@@ -3647,6 +3671,7 @@ struct VideoEditorView: View {
     @State private var hashtagDescription = ""
     @State private var showCreateHashtag = false
     @State private var showHashtagSearch = false
+    @State private var isPosting = false
 
     private var hashtagSuggestionsView: some View {
         Group {
@@ -3805,9 +3830,15 @@ struct VideoEditorView: View {
                             }
                             hashtagSuggestionsView
                             Button(action: postVideo) {
-                                Text("Post video").fontWeight(.bold).frame(maxWidth: .infinity).padding(.vertical, 13)
-                                    .background(Color.cyan, in: RoundedRectangle(cornerRadius: 10)).foregroundStyle(.black)
+                                HStack(spacing: 9) {
+                                    if isPosting { ProgressView().tint(.black) }
+                                    Text(isPosting ? "Publishing…" : "Post video").fontWeight(.bold)
+                                }
+                                .frame(maxWidth: .infinity).padding(.vertical, 13)
+                                .background(Color.cyan.opacity(isPosting ? 0.65 : 1), in: RoundedRectangle(cornerRadius: 10))
+                                .foregroundStyle(.black)
                             }
+                            .disabled(isPosting)
                         }.padding(14)
                     }
                 }
@@ -3845,6 +3876,8 @@ struct VideoEditorView: View {
     }
 
     private func postVideo() {
+        guard !isPosting else { return }
+        isPosting = true
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         let overlay = text.trimmingCharacters(in: .whitespacesAndNewlines)
