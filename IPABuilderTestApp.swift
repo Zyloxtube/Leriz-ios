@@ -655,6 +655,7 @@ struct LoopFeedView: View {
     @State private var showProfile = false
     @State private var selectedProfileClip: FeedClip? = nil
     @State private var showInbox = false
+    @State private var showChat = false
     @State private var showShare = false
     @State private var selectedSongClip: FeedClip? = nil
 
@@ -760,7 +761,8 @@ struct LoopFeedView: View {
                 }
             }
         }
-        .sheet(isPresented: $showInbox) { LerizChatListView() }
+        .sheet(isPresented: $showInbox) { InboxSheet() }
+        .sheet(isPresented: $showChat) { LerizChatListView() }
         .sheet(isPresented: $showShare) { ShareSheet(clip: clips[selectedClip]) }
         .sheet(item: $selectedSongClip) { songClip in
             SongDetailSheet(clip: songClip, clips: clips) { chosenClip in
@@ -876,7 +878,9 @@ struct LoopFeedView: View {
                 }
             }
             Spacer()
-            navButton("bubble.left.and.bubble.right", title: "Chat", selected: false) { showInbox = true }
+            navButton("bubble.left.and.bubble.right", title: "Chat", selected: false) { showChat = true }
+            Spacer()
+            navButton("text.bubble", title: "Inbox", selected: false) { showInbox = true }
             Spacer()
             navButton("person.crop.circle", title: "Profile", selected: false) { selectedProfileClip = nil; showProfile = true }
         }
