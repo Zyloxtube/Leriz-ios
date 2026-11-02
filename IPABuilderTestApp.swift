@@ -2942,6 +2942,7 @@ struct LerizChatThreadView: View {
         let media = m["mediaURL"] as? String ?? m["media_url"] as? String ?? ""
         HStack(alignment: .bottom, spacing: 7) {
             if !mine { chatAvatar(sender["avatarURL"] as? String ?? sender["avatar_url"] as? String ?? "", 27) }
+            if mine { Spacer(minLength: 30) }
             VStack(alignment: mine ? .trailing : .leading, spacing: 4) {
                 if isGroup && !mine { Text(senderName).font(.caption2).foregroundStyle(.secondary) }
                 if !media.isEmpty {
@@ -2960,7 +2961,7 @@ struct LerizChatThreadView: View {
                             in: UnevenRoundedRectangle(topLeadingRadius: mine ? 19 : 4, bottomLeadingRadius: 19, bottomTrailingRadius: 19, topTrailingRadius: mine ? 4 : 19))
                 }
             }
-            Spacer(minLength: 30)
+            if !mine { Spacer(minLength: 30) }
         }.frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
     }
 
