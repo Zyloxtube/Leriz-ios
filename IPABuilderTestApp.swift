@@ -3035,7 +3035,7 @@ struct LerizChatThreadView: View {
         } catch { self.error = error.localizedDescription; text = value }
     }
     @MainActor private func upload(_ item: PhotosPickerItem?, field: String, path: String) async {
-        guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }
+        guard let item, let rawData = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: rawData), let data = image.jpegData(compressionQuality: 0.88) else { self.error = "Could not read this image. Choose another photo."; return }
         let boundary = "Leriz-\(UUID().uuidString)"
         var body = Data()
         body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(field)\"; filename=\"image.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
