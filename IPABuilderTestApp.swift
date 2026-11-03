@@ -677,7 +677,7 @@ struct LerizLaunchView: View {
             let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
             guard (200...299).contains(http.statusCode), json["ok"] as? Bool == true,
                   let token = json["token"] as? String, !token.isEmpty else {
-                let message = json["error"] as? String ?? json["message"] as? String ?? "Request failed (HTTP \\(http.statusCode)). Check your details and try again."
+                let message = json["error"] as? String ?? json["message"] as? String ?? "Request failed (HTTP \(http.statusCode)). Check your details and try again."
                 isLoading = false
                 authError = message
                 return
