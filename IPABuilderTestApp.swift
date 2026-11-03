@@ -1448,7 +1448,7 @@ struct PlayerSurface: UIViewRepresentable {
             guard observedLayer !== layer else { return }
             observation?.invalidate()
             observedLayer = layer
-            observation = layer.observe(\\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+            observation = layer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
                 self?.onReadyChange(layer.isReadyForDisplay)
             }
         }
@@ -3765,7 +3765,7 @@ struct VideoEditorView: View {
 
     private var previewView: some View {
         ZStack {
-            PlayerSurface(player: previewPlayer)
+            PlayerSurface(player: previewPlayer, isReadyForDisplay: .constant(true))
                 .background(Color.black)
                 .onAppear {
                     previewPlayer.replaceCurrentItem(with: AVPlayerItem(url: url))
