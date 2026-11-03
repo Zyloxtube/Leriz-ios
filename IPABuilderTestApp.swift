@@ -1051,6 +1051,7 @@ struct ClipPage: View {
     @State private var player = AVPlayer()
     @State private var firstFrame: UIImage? = nil
     @State private var firstFrameVisible = true
+    @State private var isVideoFrameReady = false
     @State private var isPlaying = true
     @State private var videoFailed = false
     @State private var isFollowing = false
@@ -1087,7 +1088,7 @@ struct ClipPage: View {
                       let image = UIImage(data: data) else { return }
                 await MainActor.run {
                     firstFrame = image
-                    firstFrameVisible = player.timeControlStatus != .playing
+                    firstFrameVisible = !isVideoFrameReady
                 }
             } catch {
                 // Keep the video surface available if the thumbnail endpoint is temporarily unavailable.
@@ -1101,6 +1102,8 @@ struct ClipPage: View {
             player.currentItem?.preferredForwardBufferDuration = isActive ? 0 : 2.5
             return
         }
+        isVideoFrameReady = false
+        firstFrameVisible = true
         let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
         let item = AVPlayerItem(asset: asset)
         // Reserve adaptive buffering for the visible clip. Only a short buffer is kept
@@ -1127,7 +1130,7 @@ struct ClipPage: View {
             LinearGradient(colors: [clip.accent.opacity(0.72), Color.black, clip.accent.opacity(0.42)], startPoint: .topLeading, endPoint: .bottomTrailing)
                 .ignoresSafeArea()
             if !videoFailed, let url = URL(string: clip.videoURL) {
-                PlayerSurface(player: player)
+                PlayerSurface(player: player, isReadyForDisplay: $isVideoFrameReady)
                     .frame(maxWidth: .infinity)
                     .frame(height: commentsOpen ? max(1, UIScreen.main.bounds.height - commentsHeight) : UIScreen.main.bounds.height, alignment: .top)
                     .clipped()
@@ -1159,9 +1162,6 @@ struct ClipPage: View {
                         }
                     }
                     .onReceive(player.publisher(for: \.timeControlStatus).removeDuplicates()) { status in
-                        if status == .playing {
-                            withAnimation(.easeOut(duration: 0.12)) { firstFrameVisible = false }
-                        }
                         guard status == .playing, isActive, !viewRequestStarted,
                               let videoID = clip.serverID else { return }
                         viewRequestStarted = true
@@ -1411,13 +1411,50 @@ struct ClipPage: View {
 
 struct PlayerSurface: UIViewRepresentable {
     let player: AVPlayer
+    @Binding var isReadyForDisplay: Bool
+
+    func makeCoordinator() -> Coordinator {
+        let readyBinding = $isReadyForDisplay
+        return Coordinator { ready in
+            DispatchQueue.main.async {
+                readyBinding.wrappedValue = ready
+            }
+        }
+    }
+
     func makeUIView(context: Context) -> PlayerView {
         let view = PlayerView()
         view.playerLayer.player = player
         view.playerLayer.videoGravity = .resizeAspect
+        context.coordinator.observe(view.playerLayer)
         return view
     }
-    func updateUIView(_ uiView: PlayerView, context: Context) { uiView.playerLayer.player = player }
+
+    func updateUIView(_ uiView: PlayerView, context: Context) {
+        if uiView.playerLayer.player !== player {
+            uiView.playerLayer.player = player
+        }
+        context.coordinator.observe(uiView.playerLayer)
+    }
+
+    final class Coordinator {
+        private var observation: NSKeyValueObservation?
+        private weak var observedLayer: AVPlayerLayer?
+        private let onReadyChange: (Bool) -> Void
+
+        init(onReadyChange: @escaping (Bool) -> Void) {
+            self.onReadyChange = onReadyChange
+        }
+
+        func observe(_ layer: AVPlayerLayer) {
+            guard observedLayer !== layer else { return }
+            observation?.invalidate()
+            observedLayer = layer
+            observation = layer.observe(\\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+                self?.onReadyChange(layer.isReadyForDisplay)
+            }
+        }
+    }
 }
 
 final class PlayerView: UIView {
