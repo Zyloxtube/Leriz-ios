@@ -966,8 +966,6 @@ struct LoopFeedView: View {
             Spacer()
             navButton("bubble.left.and.bubble.right", title: "Chat", selected: false) { showChat = true }
             Spacer()
-            navButton("text.bubble", title: "Inbox", selected: false) { showInbox = true }
-            Spacer()
             navButton("person.crop.circle", title: "Profile", selected: false) { selectedProfileClip = nil; showProfile = true }
         }
         .padding(.horizontal, 24)
@@ -2346,7 +2344,7 @@ struct ProfileSheet: View {
     @AppStorage("lerizUsername") private var currentUsername = ""
     @AppStorage("lerizFollowedHandles") private var followedHandlesJSON = "[]"
     @AppStorage("lerizDisplayName") private var displayName = ""
-    @AppStorage("lerizBio") private var profileBio = "Capture your world, your way."
+    @AppStorage("lerizBio") private var profileBio = "this user has no description"
     private var isOwnProfile: Bool {
         guard let clip else { return true }
         let viewedUsername = clip.handle.trimmingCharacters(in: CharacterSet(charactersIn: "@"))
@@ -2390,7 +2388,7 @@ struct ProfileSheet: View {
                                 }
                             }
                             Text("@\((profileUser["username"] as? String) ?? (clip?.handle.replacingOccurrences(of: "@", with: "") ?? (currentUsername.isEmpty ? "user" : currentUsername)))").font(.subheadline).foregroundStyle(.secondary)
-                            Text((profileUser["bio"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? (clip == nil ? profileBio : "Creator on Leriz")).font(.caption).foregroundStyle(.secondary)
+                            Text((profileUser["bio"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "this user has no description").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
                     }.padding(.horizontal, 18).padding(.top, 15)
@@ -2434,7 +2432,7 @@ struct ProfileSheet: View {
                             .buttonStyle(.plain)
                         }
                     }.padding(.horizontal, 18)
-                    Text((profileUser["bio"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? profileBio).font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 18)
+                    Text((profileUser["bio"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "this user has no description").font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 18)
                     HStack(spacing: 0) {
                         tab("square.grid.2x2", 0)
                         tab("heart", 1)
@@ -2814,7 +2812,7 @@ struct EditProfileDemo: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("lerizDisplayName") private var name = ""
     @AppStorage("lerizUsername") private var username = ""
-    @AppStorage("lerizBio") private var bio = "Capture your world, your way."
+    @AppStorage("lerizBio") private var bio = "this user has no description"
     @State private var saving = false
     @State private var error = ""
     @State private var saved = false
